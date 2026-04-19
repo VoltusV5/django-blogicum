@@ -5,42 +5,31 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, render, redirect
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.urls import reverse_lazy
-from django.core.paginator import Paginator
+from django.urls import reverse
 from django.db.models import Count
 
 from blog.models import Category, Post, Comments
-from blog.forms import ChangeProfileForm, PostForm, CommentForm
+from blog.forms import ChangeProfileForm, CommentForm
+from .constants import PAGINATOR_ELEMENTS_IN_PAGE
+from .utils import get_paginated_page
+from .mixins import (PostMixin, IsAuthorMixin,
+                     CommentMixin, IsCommentAuthorMixin)
+
 
 User = get_user_model()
-
-PAGINATOR_ELEMENTS_IN_PAGE = 10
-
-
-def get_paginated_page(request, queryset, in_page=PAGINATOR_ELEMENTS_IN_PAGE):
-    """
-    Функция пагинации.
-    Получает request
-    Данные и кол-во элементов на странице
-    """
-    paginator = Paginator(queryset, in_page)
-    page_number = request.GET.get('page')
-    return paginator.get_page(page_number)
 
 
 def get_published_posts():
     """Возвращает опубликованные посты"""
     datetime_now = datetime.now()
 
-    post_list = (
+    return (
         Post.objects.filter(
             pub_date__lt=datetime_now, is_published=True,
             category__is_published=True)
         .annotate(comment_count=Count('comments'))
         .order_by('-pub_date')
     )
-
-    return post_list
 
 
 def index(request):
@@ -49,7 +38,7 @@ def index(request):
 
     page_obj = get_paginated_page(
         request, get_published_posts(),
-        PAGINATOR_ELEMENTS_IN_PAGE
+        PAGINATOR_ELEMENTS_IN_PAGE,
     )
 
     context = {
@@ -101,7 +90,7 @@ def category_posts(request, category_slug):
     page_obj = get_paginated_page(
         request,
         get_published_posts().filter(category=category),
-        PAGINATOR_ELEMENTS_IN_PAGE
+        PAGINATOR_ELEMENTS_IN_PAGE,
     )
 
     context = {
@@ -158,31 +147,6 @@ def edit_profile(request):
     return render(request, template_name, context)
 
 
-class IsAuthorMixin:
-    """Редактирование и удаление только для автора"""
-
-    def dispatch(self, request, *args, **kwargs):
-        instance = get_object_or_404(Post, pk=kwargs.get('post_id'))
-        if instance.author != request.user:
-            return redirect('blog:post_detail', post_id=kwargs.get('post_id'))
-        return super().dispatch(request, *args, **kwargs)
-
-
-class PostMixin:
-    """Миксин для постов"""
-
-    model = Post
-    form_class = PostForm
-    template_name = 'blog/create.html'
-    pk_url_kwarg = 'post_id'
-
-    def get_success_url(self):
-        return reverse_lazy(
-            'blog:profile',
-            kwargs={'username': self.request.user.username}
-        )
-
-
 class PostCreateView(LoginRequiredMixin, PostMixin, CreateView):
     """Создание поста"""
 
@@ -195,9 +159,9 @@ class PostUpdateView(LoginRequiredMixin, IsAuthorMixin, PostMixin, UpdateView):
     """Редактирование поста"""
 
     def get_success_url(self):
-        return reverse_lazy(
+        return reverse(
             'blog:post_detail',
-            kwargs={'post_id': self.object.pk}
+            kwargs={'post_id': self.object.pk},
         )
 
 
@@ -209,7 +173,7 @@ class PostDeleteView(LoginRequiredMixin, IsAuthorMixin, DeleteView):
     pk_url_kwarg = 'post_id'
 
     def get_success_url(self):
-        return reverse_lazy('blog:index')
+        return reverse('blog:index')
 
 
 class PostDetailView(DetailView):
@@ -223,31 +187,6 @@ class PostDetailView(DetailView):
             self.object.comments.select_related('author')
         )
         return context
-
-
-class IsCommentAuthorMixin:
-    """Проверка, что коммент редактирует именно автор"""
-
-    def dispatch(self, request, *args, **kwargs):
-        instance = get_object_or_404(Comments, pk=kwargs['comment_id'])
-        if (int(kwargs['post_id']) != instance.post_id
-                or instance.author != request.user):
-            return redirect('blog:post_detail', post_id=kwargs['post_id'])
-        return super().dispatch(request, *args, **kwargs)
-
-
-class CommentMixin:
-    """Миксин для комментариев"""
-
-    model = Comments
-    form_class = CommentForm
-    template_name = 'blog/comment.html'
-    context_object_name = 'comment'
-    pk_url_kwarg = 'comment_id'
-
-    def get_success_url(self):
-        return reverse_lazy('blog:post_detail',
-                            kwargs={'post_id': self.kwargs['post_id']})
 
 
 class CommentCreateView(LoginRequiredMixin, CommentMixin, CreateView):
@@ -274,7 +213,7 @@ class CommentDeleteView(
     pk_url_kwarg = 'comment_id'
 
     def get_success_url(self):
-        return reverse_lazy(
+        return reverse(
             'blog:post_detail',
             kwargs={'post_id': self.kwargs['post_id']},
         )
